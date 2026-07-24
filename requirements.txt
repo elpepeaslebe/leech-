@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx[socks]>=0.27
+cloakbrowser
+# fallback only (if cloakbrowser import fails the worker uses stock playwright):
+# pip install playwright && playwright install chromium
