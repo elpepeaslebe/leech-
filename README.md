@@ -27,8 +27,8 @@ See `worker/config.py` for the full list.
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/versus4/leech.git
-cd leech
+git clone https://github.com/elpepeaslebe/leech-.git
+cd leech-
 pip install -r requirements.txt
 ```
 
@@ -80,6 +80,34 @@ npm run dev
 ```
 
 The frontend runs on `http://localhost:5173` and proxies API calls to the backend.
+
+### 5. (Optional) Expose publicly with Cloudflare Tunnel
+
+To share your instance with others without port forwarding:
+
+1. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/):
+
+```bash
+# Windows (winget)
+winget install cloudflare.cloudflared
+
+# Mac
+brew install cloudflared
+
+# Linux
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+```
+
+2. Start the tunnel:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+3. Copy the URL (e.g. `https://xxx-yyy-zzz.trycloudflare.com`) and share it.
+
+**Note:** Cloudflare Tunnel creates a temporary public URL. For a permanent domain, set up a [Named Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/).
 
 ## API
 
