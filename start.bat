@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo   WMan Leech - Public Server
+echo   Leech - Open Source AI Gateway
 echo ========================================
 echo.
 echo Starting backend on http://localhost:8000
@@ -20,8 +20,8 @@ echo Starting Cloudflare Tunnel...
 echo.
 echo ========================================
 echo   SHARE THIS URL WITH OTHERS:
+echo   (requires cloudflared in PATH)
 echo ========================================
 echo.
 
 cloudflared.exe tunnel --url http://localhost:8000
-

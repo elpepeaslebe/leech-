@@ -24,18 +24,62 @@ See `worker/config.py` for the full list.
 
 ## Quick Start
 
+### 1. Clone & install
+
 ```bash
+git clone https://github.com/versus4/leech.git
+cd leech
 pip install -r requirements.txt
+```
 
-# Create your API key
+### 2. Create your API key
+
+```bash
+# Linux/Mac
 cp config/api_keys.example.json config/api_keys.json
-# Edit config/api_keys.json — replace the placeholder with your key
 
-# Start the backend
+# Windows
+copy config\api_keys.example.json config\api_keys.json
+```
+
+Edit `config/api_keys.json` and replace the placeholder with your own key:
+```json
+{
+  "keys": [
+    {
+      "key": "leech-sk-YOUR_SECRET_KEY_HERE",
+      "name": "Your Name",
+      "created": "2026-01-01",
+      "active": true
+    }
+  ]
+}
+```
+
+**Use any string you want as the API key** — it's just a password for your instance.
+
+### 3. Start the backend
+
+```bash
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 On first run, the backend automatically signs up accounts and fills the pool.
+If your IP is blocked by use.ai, run the proxy fetcher first:
+
+```bash
+python -m worker.proxy_sources 500
+```
+
+### 4. (Optional) Start the frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend runs on `http://localhost:5173` and proxies API calls to the backend.
 
 ## API
 
