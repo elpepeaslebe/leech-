@@ -142,11 +142,13 @@ DIRECT_WS_RETRIES = 2                                  # fresh-account retries o
 # the real runner failure behind ERR_PROXY_CONNECTION_FAILED.
 BROWSER_FALLBACK_ENABLED = False
 # Warm account pool (sub-second latency: signup leaves the hot path)
-ACCOUNT_POOL_SIZE = 10                                  # ready accounts kept warm (free proxies limit throughput)
-ACCOUNT_POOL_REFILL_SEC = 10                            # how often to top the pool up (slower to preserve proxies)
+ACCOUNT_POOL_SIZE = 1000                                 # ready accounts kept warm
+ACCOUNT_POOL_REFILL_SEC = 0.5                            # refill check interval (fast)
 ACCOUNT_TTL_SEC = 600                                   # drop pooled accounts older than this
+ACCOUNT_BATCH_SIZE = 50                                 # accounts to create per batch
+ACCOUNT_BATCH_CONCURRENCY = 80                          # parallel signups per batch
 # No Chromium in the WS path -> serve many at once (browser path stays capped low)
-DIRECT_MAX_CONCURRENCY = 10                             # concurrent WS completions
+DIRECT_MAX_CONCURRENCY = 200                            # concurrent WS completions
 
 # ---- Direct API (FAST PATH; skips the browser on the hot path) --------------
 # VERIFIED 2026-06-17: use.ai streams replies over a WEBSOCKET (Cloudflare Agents

@@ -1,10 +1,7 @@
 """
-Warm account pool. Signup is ~1s of HTTP; keeping a few ready accounts in memory
-takes it out of the hot path so a request only pays for the WS stream.
-
-Each account is single-use (1 free message). The background loop tops the pool
-back up to ACCOUNT_POOL_SIZE; acquire() hands one out, or signs up inline if the
-pool is drained (graceful degradation under burst load).
+High-speed account pool. Creates accounts in parallel batches for maximum throughput.
+Each account is single-use (1 free message). The background loop fills the pool
+to ACCOUNT_POOL_SIZE using concurrent batch creation.
 """
 import asyncio
 import logging
@@ -18,9 +15,11 @@ log = logging.getLogger("account_pool")
 
 class AccountPool:
     def __init__(self):
-        self.size = getattr(config, "ACCOUNT_POOL_SIZE", 8)
+        self.size = getattr(config, "ACCOUNT_POOL_SIZE", 1000)
         self.ttl = getattr(config, "ACCOUNT_TTL_SEC", 600)
-        self.refill_sec = getattr(config, "ACCOUNT_POOL_REFILL_SEC", 3)
+        self.refill_sec = getattr(config, "ACCOUNT_POOL_REFILL_SEC", 0.5)
+        self.batch_size = getattr(config, "ACCOUNT_BATCH_SIZE", 50)
+        self.batch_concurrency = getattr(config, "ACCOUNT_BATCH_CONCURRENCY", 80)
         self._q: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
         self._consec_fails = 0
@@ -33,33 +32,63 @@ class AccountPool:
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
-            log.info("account pool started (target=%d)", self.size)
+            log.info("account pool started (target=%d, batch=%d, concurrency=%d)",
+                     self.size, self.batch_size, self.batch_concurrency)
 
-    async def _make_one(self) -> None:
-        a = await create_account()
-        a["_born"] = time.time()
-        await self._queue().put(a)
+    async def _create_one(self) -> dict | None:
+        """Create one account. Returns dict or None on failure."""
+        try:
+            a = await create_account()
+            a["_born"] = time.time()
+            return a
+        except Exception as e:
+            log.warning("account signup failed: %s", e)
+            return None
+
+    async def _fill_batch(self, count: int) -> int:
+        """Create `count` accounts in parallel. Returns number of successes."""
+        sem = asyncio.Semaphore(self.batch_concurrency)
+        results = []
+
+        async def _worker():
+            async with sem:
+                return await self._create_one()
+
+        tasks = [_worker() for _ in range(count)]
+        done = await asyncio.gather(*tasks, return_exceptions=True)
+
+        success = 0
+        for r in done:
+            if isinstance(r, dict) and r:
+                q = self._queue()
+                if not q.full():
+                    await q.put(r)
+                    success += 1
+        return success
 
     async def _loop(self) -> None:
         while True:
             try:
-                deficit = self.size - self._queue().qsize()
+                q = self._queue()
+                deficit = self.size - q.qsize()
+
                 if deficit > 0:
-                    # Only create 1 at a time to avoid burning proxies
-                    try:
-                        await self._make_one()
+                    batch = min(deficit, self.batch_size)
+                    created = await self._fill_batch(batch)
+
+                    if created > 0:
                         self._consec_fails = 0
-                        log.info("pool +1 (now=%d)", self._queue().qsize())
-                    except Exception as e:
+                        log.info("pool +%d (now=%d/%d)", created, q.qsize(), self.size)
+                    else:
                         self._consec_fails += 1
-                        log.warning("pool signup failed (%d consecutive): %s",
-                                   self._consec_fails, e)
+                        log.warning("batch failed (%d consecutive)", self._consec_fails)
             except Exception as e:
                 log.warning("pool loop error: %s", e)
+
             # Back off on consecutive failures
             delay = self.refill_sec
             if self._consec_fails > 3:
-                delay = min(self.refill_sec * self._consec_fails, 60)
+                delay = min(0.5 * self._consec_fails, 10)
             await asyncio.sleep(delay)
 
     async def acquire(self) -> dict:
@@ -73,7 +102,7 @@ class AccountPool:
             if time.time() - a.get("_born", 0) < self.ttl:
                 return a               # fresh enough -> use it
             # stale -> drop and try the next one
-        return await create_account()  # drained -> ~1s inline signup
+        return await create_account()  # drained -> inline signup
 
     def ready(self) -> int:
         return self._q.qsize() if self._q else 0

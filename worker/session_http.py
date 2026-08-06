@@ -34,7 +34,7 @@ async def create_account(proxy: str | None = None) -> dict:
 
     # Try direct IP first (fast path)
     try:
-        async with httpx.AsyncClient(timeout=30, headers=_HEADERS) as c:
+        async with httpx.AsyncClient(timeout=15, headers=_HEADERS) as c:
             r1 = await c.post(f"{config.AUTH_BASE}/email-login", json={"email": email})
             r1.raise_for_status()
             return await _finish_signup(c, email)
@@ -51,7 +51,7 @@ async def create_account(proxy: str | None = None) -> dict:
 
     email = gen_email()  # fresh email for proxy attempt
     try:
-        async with httpx.AsyncClient(timeout=30, headers=_HEADERS, proxy=proxy_url) as c:
+        async with httpx.AsyncClient(timeout=15, headers=_HEADERS, proxy=proxy_url) as c:
             r1 = await c.post(f"{config.AUTH_BASE}/email-login", json={"email": email})
             r1.raise_for_status()
             return await _finish_signup(c, email)
@@ -114,7 +114,7 @@ async def get_ws_tokens(acct: dict, proxy: str | None = None) -> tuple[str, str]
         if attempt_proxy is None and proxy is None:
             # Try direct
             try:
-                async with httpx.AsyncClient(timeout=30, headers=hdrs) as c:
+                async with httpx.AsyncClient(timeout=15, headers=hdrs) as c:
                     r, r2 = await asyncio.gather(
                         c.get(f"{config.AUTH_BASE}/token"),
                         c.post(f"{config.AUTH_BASE}/app-attestation",
@@ -129,7 +129,7 @@ async def get_ws_tokens(acct: dict, proxy: str | None = None) -> tuple[str, str]
                 raise
         elif attempt_proxy:
             try:
-                async with httpx.AsyncClient(timeout=30, headers=hdrs, proxy=attempt_proxy) as c:
+                async with httpx.AsyncClient(timeout=15, headers=hdrs, proxy=attempt_proxy) as c:
                     r, r2 = await asyncio.gather(
                         c.get(f"{config.AUTH_BASE}/token"),
                         c.post(f"{config.AUTH_BASE}/app-attestation",
