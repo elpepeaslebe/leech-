@@ -234,7 +234,8 @@ async def run_messages(model: str, messages: list, acct: dict | None = None) -> 
         raise
 
 
-async def stream_messages(model: str, messages: list, acct: dict | None = None):
+async def stream_messages(model: str, messages: list, acct: dict | None = None,
+                          agentic: bool = False):
     """Streaming multi-turn: yield text deltas as the WS produces them, so the
     client sees a long reply build up live instead of waiting for the whole thing
     (and no total-time cap kills big code generations)."""
@@ -246,7 +247,8 @@ async def stream_messages(model: str, messages: list, acct: dict | None = None):
         try:
             if acct is None:
                 acct = await account_pool.POOL.acquire()
-            async for delta in direct.stream(model, messages=messages, acct=acct):
+            async for delta in direct.stream(model, messages=messages, acct=acct,
+                                             agentic=agentic):
                 produced = True
                 yield delta
             health.H.send(True, "direct")

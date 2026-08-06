@@ -18,20 +18,60 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from worker import bank, config, health
 from worker.harvester import top_up
-from worker.leech import run_messages, stream_messages
+from worker.leech import run_messages
 from . import context
-from .pool import run_guarded, run_guarded_gen
+from .pool import run_guarded
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("backend")
 app = FastAPI(title="WMan")
+
+# ---- API Key Auth -----------------------------------------------------------
+API_KEYS_PATH = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+_bearer = HTTPBearer(auto_error=False)
+
+def _load_api_keys() -> dict:
+    """Load API keys from config file."""
+    if not API_KEYS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(API_KEYS_PATH.read_text(encoding="utf-8"))
+        return {k["key"]: k for k in data.get("keys", []) if k.get("active", True)}
+    except Exception:
+        return {}
+
+_API_KEYS = _load_api_keys()
+
+def _get_client_key(request: Request) -> str | None:
+    """Extract API key from request (Bearer header or query param)."""
+    # Check Authorization header
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    # Check query param
+    return request.query_params.get("api_key")
+
+
+async def require_api_key(request: Request):
+    """Dependency: require valid API key on /v1/ endpoints."""
+    key = _get_client_key(request)
+    if not key or key not in _API_KEYS:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return _API_KEYS[key]
+
+
+def _no_auth(request: Request):
+    """No auth required (for /chat and / frontend)."""
+    return None
+
 
 # The /v1 endpoints are meant to be hit from other origins ("people build it
 # themselves"), so allow cross-origin calls. The bundled frontend is same-origin
@@ -59,8 +99,10 @@ async def _start_prewarmer():
     # stays out of the hot path. Only run the browser prewarmer for the fallback.
     if getattr(config, "DIRECT_WS_ENABLED", False):
         from worker.account_pool import POOL
+        from worker.free_proxy_pool import start_background_refresh
         POOL.start()
-        log.info("DIRECT_WS_ENABLED -> headless path, warm account pool started")
+        start_background_refresh()
+        log.info("DIRECT_WS_ENABLED -> headless path, warm account pool + proxy pool started")
         return
 
     async def loop():
@@ -197,22 +239,39 @@ async def _stream_reply(reply: str):
     yield "data: [DONE]\n\n"
 
 
+def _stream_tool_event(event: dict) -> str | None:
+    """Convert a tool_stream event to an SSE string, or None to skip."""
+    kind = event.get("type")
+    if kind == "token":
+        return _sse(event["token"])
+    elif kind == "tool_call":
+        return _sse_payload({"type": "tool_call", "name": event["name"], "args": event["args"]})
+    elif kind == "tool_result":
+        return _sse_payload({"type": "tool_result", "name": event["name"], "result": event["result"]})
+    return None
+
+
 @app.post("/chat")
 async def chat(req: Request):
     body = await req.json()
     message = body.get("message", "")
     model = body.get("model", "default")
+    effort = body.get("effort", "medium")
     session_id = body.get("sessionId") or str(uuid.uuid4())
 
     messages = context.build_messages(session_id, message)   # role-tagged history + new turn
     context.append(session_id, "user", message)
 
     async def gen():
+        from worker.tool_stream import stream_with_tools
         parts: list[str] = []
         try:
-            async for delta in run_guarded_gen(lambda: stream_messages(model, messages)):
-                parts.append(delta)
-                yield _sse(delta)               # forward each token the instant it lands
+            async for event in stream_with_tools(model, messages, effort=effort):
+                sse = _stream_tool_event(event)
+                if sse:
+                    yield sse
+                if event["type"] == "token":
+                    parts.append(event["token"])
         except Exception as exc:
             log.warning("chat stream failed: %s: %s", type(exc).__name__, exc)
             if not parts:
@@ -229,7 +288,7 @@ async def chat(req: Request):
 
 # --- stateless: simple -------------------------------------------------------
 @app.post("/v1/chat")
-async def v1_chat(req: Request):
+async def v1_chat(req: Request, _key=Depends(require_api_key)):
     body = await req.json()
     model = body.get("model", "default")
     reply = await run_guarded(lambda: run_messages(model, body.get("messages", [])))
@@ -240,13 +299,15 @@ async def v1_chat(req: Request):
 
 
 @app.post("/agent")
-async def agent_run(req: Request):
-    from worker import agent as _agent
+async def agent_run(req: Request, _key=Depends(require_api_key)):
+    from worker.tool_stream import complete_with_tools
     body = await req.json()
     message = body.get("message") or body.get("prompt") or ""
     model = body.get("model", "default")
-    result = await run_guarded(lambda: _agent.run(message, model))
-    return JSONResponse(result)
+    effort = body.get("effort", "medium")
+    messages = [{"role": "user", "content": message}]
+    result = await run_guarded(lambda: complete_with_tools(model, messages, effort=effort))
+    return JSONResponse({"text": result, "events": []})
 
 
 # --- stateless: OpenAI-compatible -------------------------------------------
@@ -265,27 +326,66 @@ def _openai_block(reply: str, model: str) -> dict:
 
 
 @app.post("/v1/chat/completions")
-async def openai_completions(req: Request):
+async def openai_completions(req: Request, _key=Depends(require_api_key)):
     body = await req.json()
     model = body.get("model", "default")
     stream = bool(body.get("stream", False))
     msgs = body.get("messages", [])
+    has_tools = bool(body.get("tools"))
+    effort = body.get("effort", "medium")
 
     if stream:
+        from worker.tool_stream import stream_with_tools
         cid = "chatcmpl-" + uuid.uuid4().hex[:24]
         created = int(time.time())
 
         async def gen():
             base = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model}
-            async for delta in run_guarded_gen(lambda: stream_messages(model, msgs)):
-                chunk = {**base, "choices": [{"index": 0, "delta": {"content": delta},
-                                              "finish_reason": None}]}
-                yield f"data: {json.dumps(chunk)}\n\n"
+            async for event in stream_with_tools(model, msgs, effort=effort, has_openai_tools=has_tools):
+                if event["type"] == "token":
+                    chunk = {**base, "choices": [{"index": 0, "delta": {"content": event["token"]},
+                                                  "finish_reason": None}]}
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                elif event["type"] == "tool_call" and has_tools:
+                    tc_chunk = {
+                        **base,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "id": "call_" + uuid.uuid4().hex[:16],
+                                    "type": "function",
+                                    "function": {
+                                        "name": event["name"],
+                                        "arguments": json.dumps(event["args"]),
+                                    }
+                                }]
+                            },
+                            "finish_reason": None,
+                        }]
+                    }
+                    yield f"data: {json.dumps(tc_chunk)}\n\n"
+                elif event["type"] == "tool_result" and has_tools:
+                    result_chunk = {
+                        **base,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "role": "tool",
+                                "tool_call_id": "call_" + uuid.uuid4().hex[:16],
+                                "content": event["result"],
+                            },
+                            "finish_reason": None,
+                        }]
+                    }
+                    yield f"data: {json.dumps(result_chunk)}\n\n"
             done = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
             yield f"data: {json.dumps(done)}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    reply = await run_guarded(lambda: run_messages(model, msgs))
+    from worker.tool_stream import complete_with_tools
+    reply = await run_guarded(lambda: complete_with_tools(model, msgs, effort=effort, has_openai_tools=has_tools))
     return JSONResponse(_openai_block(reply, model))

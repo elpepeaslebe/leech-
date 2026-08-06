@@ -68,23 +68,21 @@ def _to_parts(messages: list) -> list:
     return out
 
 
-def _build_frame(chat_id, user_id, email, model, parts):
+def _build_frame(chat_id, user_id, email, model, parts, agentic=False):
     return {
         "chatId": chat_id, "userId": user_id, "email": email,
         "userType": "regular", "userEmail": email, "planType": "free",
         "subscriptionStatus": "inactive", "isFreemium": False, "isTestUser": False,
         "selectedModel": config.MODEL_PREFIX + _model_slug(model), "locale": "en",
         "isWebSearchMode": False, "isDeepResearchMode": False,
-        "isImageGenerationMode": False, "agenticMode": False,
+        "isImageGenerationMode": False, "agenticMode": bool(agentic),
         "messages": parts,
         "trigger": "submit-message", "source": "chat_page",
     }
 
 
-async def _stream_gen(acct: dict, model: str, parts: list):
-    """Yield text deltas as they arrive. Uses a per-token IDLE timeout (resets on
-    every frame), so a long code generation never trips a total-time cap -- it
-    only ends on finish/stream-complete, a closed socket, or `idle`s of silence."""
+async def _stream_gen(acct: dict, model: str, parts: list, agentic: bool = False):
+    """Yield text deltas as they arrive."""
     chat_id = str(uuid.uuid4())
     token, app_token = await get_ws_tokens(acct)
     q = urlencode({
@@ -99,7 +97,7 @@ async def _stream_gen(acct: dict, model: str, parts: list):
                                   open_timeout=config.WS_OPEN_TIMEOUT,
                                   ping_interval=20, ping_timeout=60) as ws:
         await ws.send(json.dumps(_build_frame(
-            chat_id, acct["user_id"], acct["email"], model, parts)))
+            chat_id, acct["user_id"], acct["email"], model, parts, agentic=agentic)))
         while True:
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=idle)
@@ -128,7 +126,8 @@ async def _stream_gen(acct: dict, model: str, parts: list):
 
 
 async def stream(model: str, prompt: str | None = None,
-                 messages: list | None = None, acct: dict | None = None):
+                 messages: list | None = None, acct: dict | None = None,
+                 agentic: bool = False):
     """Async generator of text deltas. Pass EITHER `prompt` or a role-tagged
     `messages` list. Retries on a FRESH account only while nothing has been
     emitted yet (once tokens start flowing we never restart -- the client already
@@ -142,7 +141,7 @@ async def stream(model: str, prompt: str | None = None,
         acct = None                       # supplied account is single-use; reroll fresh
         produced = False
         try:
-            async for d in _stream_gen(a, model, parts):
+            async for d in _stream_gen(a, model, parts, agentic=agentic):
                 produced = True
                 yield d
             if produced:
@@ -160,10 +159,12 @@ async def stream(model: str, prompt: str | None = None,
 
 
 async def complete(model: str, prompt: str | None = None,
-                   messages: list | None = None, acct: dict | None = None) -> str:
+                   messages: list | None = None, acct: dict | None = None,
+                   agentic: bool = False) -> str:
     """Buffered variant: collect the whole reply (used by non-streaming callers)."""
     out = []
-    async for d in stream(model, prompt=prompt, messages=messages, acct=acct):
+    async for d in stream(model, prompt=prompt, messages=messages, acct=acct,
+                          agentic=agentic):
         out.append(d)
     reply = "".join(out).strip()
     if not reply:

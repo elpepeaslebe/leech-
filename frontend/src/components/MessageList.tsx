@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Copy, ImageIcon, Repeat2, UserRound } from "lucide-react";
-import type { ChatMessage } from "../types";
+import { Bot, Copy, FileCode, ImageIcon, Repeat2, Terminal, UserRound } from "lucide-react";
+import type { ChatMessage, ToolCall } from "../types";
 import { ImageGeneration } from "./ui/ai-chat-image-generation-1";
 import { ShiningText } from "./ui/shining-text";
 
@@ -111,6 +111,50 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   );
 }
 
+function ToolCallBlock({ tool }: { tool: ToolCall }) {
+  const [expanded, setExpanded] = useState(true);
+  const argsStr = Object.keys(tool.args).length
+    ? JSON.stringify(tool.args, null, 2)
+    : "(no arguments)";
+
+  return (
+    <div className="tool-call-block">
+      <button
+        className="tool-call-header"
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <Terminal size={13} />
+        <span className="tool-call-name">{tool.name}</span>
+        <span className="tool-call-chevron">{expanded ? "\u25B2" : "\u25BC"}</span>
+      </button>
+      {expanded && (
+        <div className="tool-call-body">
+          <div className="tool-call-section">
+            <span className="tool-call-label">arguments</span>
+            <pre className="tool-call-code">
+              <code>{argsStr}</code>
+            </pre>
+          </div>
+          {tool.result && (
+            <div className="tool-call-section">
+              <span className="tool-call-label">result</span>
+              <pre className="tool-call-code">
+                <code>{tool.result.slice(0, 2000)}{tool.result.length > 2000 ? "\n... (truncated)" : ""}</code>
+              </pre>
+            </div>
+          )}
+          {!tool.result && (
+            <div className="tool-call-section tool-call-pending">
+              <ShiningText text="executing..." className="font-medium" />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RichText({ content }: { content: string }) {
   const parts = splitContent(content);
   return (
@@ -148,7 +192,7 @@ function ImagePending() {
 }
 
 function MessageContent({ message }: { message: ChatMessage }) {
-  if (message.pending && !message.content) {
+  if (message.pending && !message.content && (!message.toolCalls || message.toolCalls.length === 0)) {
     return message.variant === "image" ? (
       <ImagePending />
     ) : (
@@ -171,7 +215,18 @@ function MessageContent({ message }: { message: ChatMessage }) {
   const image = message.role === "assistant" && !message.error ? extractImage(message.content) : null;
   if (image) return <GeneratedImage image={image} />;
 
-  return <RichText content={message.content} />;
+  return (
+    <>
+      {message.toolCalls && message.toolCalls.length > 0 && (
+        <div className="tool-calls-container">
+          {message.toolCalls.map((tool, index) => (
+            <ToolCallBlock key={`tool-${index}`} tool={tool} />
+          ))}
+        </div>
+      )}
+      {message.content && <RichText content={message.content} />}
+    </>
+  );
 }
 
 export function MessageList({ messages, onContinue }: MessageListProps) {

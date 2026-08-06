@@ -1,13 +1,30 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.log
 
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/*.tsbuildinfo
 frontend/node_modules/.tmp/
 
+# Sensitive data - NEVER commit
+config/api_keys.json
+proxy_cache.json
+proxies.txt
 bank/accounts.db
 bank/states/
 tor_data/
+
+# Temp files
+test_*.py
+*.bak
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*

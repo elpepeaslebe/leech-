@@ -142,11 +142,11 @@ DIRECT_WS_RETRIES = 2                                  # fresh-account retries o
 # the real runner failure behind ERR_PROXY_CONNECTION_FAILED.
 BROWSER_FALLBACK_ENABLED = False
 # Warm account pool (sub-second latency: signup leaves the hot path)
-ACCOUNT_POOL_SIZE = 8                                   # ready accounts kept warm
-ACCOUNT_POOL_REFILL_SEC = 3                             # how often to top the pool up
+ACCOUNT_POOL_SIZE = 10                                  # ready accounts kept warm (free proxies limit throughput)
+ACCOUNT_POOL_REFILL_SEC = 10                            # how often to top the pool up (slower to preserve proxies)
 ACCOUNT_TTL_SEC = 600                                   # drop pooled accounts older than this
 # No Chromium in the WS path -> serve many at once (browser path stays capped low)
-DIRECT_MAX_CONCURRENCY = 24                             # concurrent WS completions
+DIRECT_MAX_CONCURRENCY = 10                             # concurrent WS completions
 
 # ---- Direct API (FAST PATH; skips the browser on the hot path) --------------
 # VERIFIED 2026-06-17: use.ai streams replies over a WEBSOCKET (Cloudflare Agents
@@ -180,9 +180,9 @@ DIRECT_API_RESPONSE_PATH = "choices.0.message.content"
 # ---- Account bank -----------------------------------------------------------
 BANK_PATH = "bank/accounts.db"        # sqlite store of harvested accounts/tokens
 STORAGE_STATE_DIR = "bank/states"     # saved cookies/localStorage per account
-BANK_MIN_FRESH = 10                   # keep at least this many warm + ready
-BANK_PREWARM_BATCH = 5                # how many to harvest per top-up cycle
-PREWARM_INTERVAL_SEC = 30             # how often the backend tops the bank up
+BANK_MIN_FRESH = 15                   # keep at least this many warm + ready
+BANK_PREWARM_BATCH = 8                # how many to harvest per top-up cycle
+PREWARM_INTERVAL_SEC = 20             # how often the backend tops the bank up
 # HARD RULE: each account is worth exactly ONE message. On a banked-account
 # failure we retire it and claim a fresh one -- never a 2nd send through one acct.
 MAX_BANKED_ATTEMPTS = 2               # how many fresh accounts to try before cold signup
@@ -202,7 +202,7 @@ PROXY_DEFAULT_SCHEME = "http"   # used when a proxy line omits the scheme
 # start_tor.bat (uses the tor.exe bundled in Tor Browser, no browser needed),
 # then this rotates the exit IP before each signup. NEWNYM is rate-limited to
 # ~10s, so keep BANK_PREWARM_BATCH small (2-3).  >>> pre-wired for your machine.
-PROXY_TOR = True                 # you have Tor -> on
+PROXY_TOR = False                # Tor not available, using free proxy pool instead
 TOR_BROWSER_DIR = r"C:\Users\Emir\Desktop\Tor Browser"   # your Tor Browser folder
 TOR_SOCKS = "socks5://127.0.0.1:9050"
 TOR_CONTROL_PORT = 9051

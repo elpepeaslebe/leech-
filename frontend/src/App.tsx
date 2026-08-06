@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Send, SquarePen, Trash2 } from "lucide-react";
-import { fetchHealth, fetchModels, streamChat } from "./api";
+import { Activity, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Send, Settings, SquarePen, Trash2 } from "lucide-react";
+import { fetchHealth, fetchModels, getBackendUrl, setBackendUrl, streamChat } from "./api";
 import type { ChatMessage, HealthResponse, ModelOption } from "./types";
 import { MessageList } from "./components/MessageList";
 import { ModelPicker } from "./components/ModelPicker";
@@ -12,6 +12,7 @@ const STORAGE_ACTIVE_THREAD = "nyx.activeThread.react";
 const LEGACY_STORAGE_THREAD = "nyx.thread.react";
 const LEGACY_STORAGE_SESSION = "nyx.sessionId";
 const STORAGE_MODEL = "nyx.model";
+const STORAGE_EFFORT = "nyx.effort";
 const SIDEBAR_BREAKPOINT = "(max-width: 860px)";
 
 type ChatThread = {
@@ -110,9 +111,13 @@ export function App() {
   });
   const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState(() => localStorage.getItem(STORAGE_MODEL) ?? "default");
+  const [effort, setEffort] = useState(() => localStorage.getItem(STORAGE_EFFORT) ?? "medium");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
+  const [backendUrl, setBackendUrlState] = useState(() => getBackendUrl());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [backendInput, setBackendInput] = useState(() => getBackendUrl());
   const pendingId = useRef<string | null>(null);
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId) ?? threads[0];
@@ -136,6 +141,18 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_MODEL, model);
   }, [model]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_EFFORT, effort);
+  }, [effort]);
+
+  function saveBackendUrl() {
+    const cleaned = backendInput.trim().replace(/\/+$/, "");
+    setBackendUrl(cleaned);
+    setBackendUrlState(cleaned);
+    setSettingsOpen(false);
+    window.location.reload();
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -233,24 +250,48 @@ export function App() {
     }));
 
     try {
-      await streamChat({ message: trimmed, model, sessionId }, (event) => {
+      await streamChat({ message: trimmed, model, sessionId, effort }, (event) => {
         updateActiveThread((thread) => ({
           ...thread,
           updatedAt: Date.now(),
-          messages: thread.messages.map((message) =>
-            message.id === assistantId && event.type === "token"
-              ? { ...message, content: message.content + event.token, pending: false }
-              : message.id === assistantId && event.type === "image"
-                ? {
-                    ...message,
-                    content: message.content || event.image.caption || "",
-                    imageUrl: event.image.url,
-                    imageAlt: event.image.alt || "Generated image",
-                    variant: "image",
-                    pending: false
-                  }
-                : message
-          )
+          messages: thread.messages.map((message) => {
+            if (message.id !== assistantId) return message;
+            if (event.type === "token") {
+              return { ...message, content: message.content + event.token, pending: false };
+            }
+            if (event.type === "image") {
+              return {
+                ...message,
+                content: message.content || event.image.caption || "",
+                imageUrl: event.image.url,
+                imageAlt: event.image.alt || "Generated image",
+                variant: "image",
+                pending: false,
+              };
+            }
+            if (event.type === "tool_call") {
+              const existing = message.toolCalls ?? [];
+              return {
+                ...message,
+                toolCalls: [...existing, { name: event.name, args: event.args }],
+                pending: false,
+              };
+            }
+            if (event.type === "tool_result") {
+              const existing = message.toolCalls ?? [];
+              const last = existing[existing.length - 1];
+              if (last && last.name === event.name && !last.result) {
+                const updated = [...existing.slice(0, -1), { ...last, result: event.result }];
+                return { ...message, toolCalls: updated, pending: false };
+              }
+              return {
+                ...message,
+                toolCalls: [...existing, { name: event.name, args: {}, result: event.result }],
+                pending: false,
+              };
+            }
+            return message;
+          })
         }));
       });
       updateActiveThread((thread) => ({
@@ -352,6 +393,48 @@ export function App() {
         <div className="panel-section">
           <p className="section-label">model</p>
           <ModelPicker groups={groupedModels} value={model} onChange={setModel} />
+        </div>
+
+        <div className="panel-section">
+          <p className="section-label">effort</p>
+          <div className="effort-picker">
+            {(["low", "medium", "high"] as const).map((level) => (
+              <button
+                key={level}
+                className={`effort-button ${effort === level ? "is-active" : ""}`}
+                type="button"
+                onClick={() => setEffort(level)}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel-section">
+          <p className="section-label">backend</p>
+          <button className="settings-toggle" type="button" onClick={() => setSettingsOpen(!settingsOpen)}>
+            <Settings size={14} />
+            {backendUrl ? "Connected" : "Not connected"}
+          </button>
+          {settingsOpen && (
+            <div className="settings-panel">
+              <input
+                className="settings-input"
+                type="text"
+                placeholder="https://xxx.trycloudflare.com"
+                value={backendInput}
+                onChange={(e) => setBackendInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveBackendUrl(); }}
+              />
+              <button className="settings-save" type="button" onClick={saveBackendUrl}>
+                Save & Reload
+              </button>
+              {backendUrl && (
+                <p className="settings-current">{backendUrl}</p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="panel-actions">

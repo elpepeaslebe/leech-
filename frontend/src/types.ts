@@ -1,5 +1,11 @@
 export type ChatRole = "user" | "assistant";
 
+export type ToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+  result?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
@@ -9,6 +15,7 @@ export type ChatMessage = {
   imageAlt?: string;
   pending?: boolean;
   error?: boolean;
+  toolCalls?: ToolCall[];
 };
 
 export type ModelOption = {

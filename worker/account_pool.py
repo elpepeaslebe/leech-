@@ -23,6 +23,7 @@ class AccountPool:
         self.refill_sec = getattr(config, "ACCOUNT_POOL_REFILL_SEC", 3)
         self._q: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
+        self._consec_fails = 0
 
     def _queue(self) -> asyncio.Queue:
         if self._q is None:
@@ -44,11 +45,22 @@ class AccountPool:
             try:
                 deficit = self.size - self._queue().qsize()
                 if deficit > 0:
-                    await asyncio.gather(*[self._make_one() for _ in range(deficit)],
-                                         return_exceptions=True)
+                    # Only create 1 at a time to avoid burning proxies
+                    try:
+                        await self._make_one()
+                        self._consec_fails = 0
+                        log.info("pool +1 (now=%d)", self._queue().qsize())
+                    except Exception as e:
+                        self._consec_fails += 1
+                        log.warning("pool signup failed (%d consecutive): %s",
+                                   self._consec_fails, e)
             except Exception as e:
                 log.warning("pool loop error: %s", e)
-            await asyncio.sleep(self.refill_sec)
+            # Back off on consecutive failures
+            delay = self.refill_sec
+            if self._consec_fails > 3:
+                delay = min(self.refill_sec * self._consec_fails, 60)
+            await asyncio.sleep(delay)
 
     async def acquire(self) -> dict:
         """A warm account if one is ready (and not stale); otherwise sign up inline."""
