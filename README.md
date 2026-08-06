@@ -60,6 +60,23 @@ Edit `config/api_keys.json` and replace the placeholder with your own key:
 
 ### 3. Start the backend
 
+**Option A: Using `start.bat` (Windows, recommended)**
+
+Double-click `start.bat`. It will:
+1. Start Tor (if configured)
+2. Start the backend
+3. Start Cloudflare Tunnel
+
+**Before first run**, edit `start.bat` and change the Tor Browser path:
+```batch
+REM Change this to YOUR Tor Browser path:
+set "TOR_EXE=C:\Users\YOUR_USERNAME\Desktop\Tor Browser\Browser\TorBrowser\Tor\tor.exe"
+```
+
+If Tor is not found, it will skip and run without it.
+
+**Option B: Manual start**
+
 ```bash
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
