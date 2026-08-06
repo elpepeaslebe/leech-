@@ -1,8 +1,0 @@
-node_modules
-frontend/node_modules
-frontend/dist
-.git
-*.pyc
-__pycache__
-.env
-config/api_keys.json
