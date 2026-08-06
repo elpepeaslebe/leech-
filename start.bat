@@ -23,5 +23,5 @@ echo   SHARE THIS URL WITH OTHERS:
 echo ========================================
 echo.
 
-"C:\Users\bebey\cloudflared.exe" tunnel --url http://localhost:8000
+cloudflared.exe tunnel --url http://localhost:8000
 

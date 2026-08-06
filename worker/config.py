@@ -203,7 +203,7 @@ PROXY_DEFAULT_SCHEME = "http"   # used when a proxy line omits the scheme
 # then this rotates the exit IP before each signup. NEWNYM is rate-limited to
 # ~10s, so keep BANK_PREWARM_BATCH small (2-3).  >>> pre-wired for your machine.
 PROXY_TOR = False                # Tor not available, using free proxy pool instead
-TOR_BROWSER_DIR = r"C:\Users\Emir\Desktop\Tor Browser"   # your Tor Browser folder
+TOR_BROWSER_DIR = r"C:\Users\YOU\Desktop\Tor Browser"   # your Tor Browser folder
 TOR_SOCKS = "socks5://127.0.0.1:9050"
 TOR_CONTROL_PORT = 9051
 TOR_CONTROL_PASSWORD = ""        # "" = cookie auth (what start_tor.bat sets up)

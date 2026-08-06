@@ -6,7 +6,7 @@ REM  with cookie auth. Leave this window OPEN while you run leech.
 REM  Run this from the leech\ folder so tor_data lands beside it.
 REM ============================================================
 
-set "TOR_EXE=C:\Users\Emir\Desktop\Tor Browser\Browser\TorBrowser\Tor\tor.exe"
+set "TOR_EXE=C:\Users\YOU\Desktop\Tor Browser\Browser\TorBrowser\Tor\tor.exe"
 set "DATA=%~dp0tor_data"
 
 if not exist "%TOR_EXE%" (
