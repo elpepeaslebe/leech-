@@ -142,11 +142,11 @@ DIRECT_WS_RETRIES = 2                                  # fresh-account retries o
 # the real runner failure behind ERR_PROXY_CONNECTION_FAILED.
 BROWSER_FALLBACK_ENABLED = False
 # Warm account pool (sub-second latency: signup leaves the hot path)
-ACCOUNT_POOL_SIZE = 1000                                 # ready accounts kept warm
-ACCOUNT_POOL_REFILL_SEC = 0.5                            # refill check interval (fast)
+ACCOUNT_POOL_SIZE = 500                                  # ready accounts kept warm
+ACCOUNT_POOL_REFILL_SEC = 30                            # refill check interval (30s = stable)
 ACCOUNT_TTL_SEC = 600                                   # drop pooled accounts older than this
 ACCOUNT_BATCH_SIZE = 50                                 # accounts to create per batch
-ACCOUNT_BATCH_CONCURRENCY = 80                          # parallel signups per batch
+ACCOUNT_BATCH_CONCURRENCY = 10                          # parallel signups per batch (stable, no 403)
 # No Chromium in the WS path -> serve many at once (browser path stays capped low)
 DIRECT_MAX_CONCURRENCY = 200                            # concurrent WS completions
 
