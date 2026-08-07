@@ -204,14 +204,15 @@ PROXY_DEFAULT_SCHEME = "http"   # used when a proxy line omits the scheme
 # start_tor.bat (uses the tor.exe bundled in Tor Browser, no browser needed),
 # then this rotates the exit IP before each signup. NEWNYM is rate-limited to
 # ~10s, so keep BANK_PREWARM_BATCH small (2-3).  >>> pre-wired for your machine.
-PROXY_TOR = False                # Tor not available, using free proxy pool instead
-TOR_BROWSER_DIR = r"C:\Users\YOU\Desktop\Tor Browser"   # your Tor Browser folder
+PROXY_TOR = True
+TOR_BROWSER_DIR = r"C:\Users\YOUR_USERNAME\Tor Browser"
 TOR_SOCKS = "socks5://127.0.0.1:9050"
 TOR_CONTROL_PORT = 9051
-TOR_CONTROL_PASSWORD = ""        # "" = cookie auth (what start_tor.bat sets up)
-TOR_DATA_DIR = "tor_data"        # where start_tor.bat writes tor's data + auth cookie
-TOR_COOKIE_PATH = ""             # "" = auto: <TOR_DATA_DIR>/control_auth_cookie
-TOR_NEWNYM_DELAY = 10            # seconds between circuit renewals (Tor's rate limit)
+TOR_CONTROL_PASSWORD = ""
+TOR_DATA_DIR = "tor_data"
+TOR_COOKIE_PATH = ""
+TOR_NEWNYM_DELAY = 3
+TOR_NEWNYM_EVERY = 2
 
 # Option B: free public proxy lists -- run `python -m worker.proxy_sources` to
 # fetch + validate them into PROXY_FILE, then set PROXY_FILE above. Free proxies
