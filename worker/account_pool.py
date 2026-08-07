@@ -32,8 +32,18 @@ class AccountPool:
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
+            # Fast initial fill: create first batch immediately
+            asyncio.create_task(self._initial_fill())
             log.info("account pool started (target=%d, batch=%d, concurrency=%d)",
                      self.size, self.batch_size, self.batch_concurrency)
+
+    async def _initial_fill(self) -> None:
+        """Aggressively fill pool on startup."""
+        await asyncio.sleep(1)  # wait for server to be ready
+        q = self._queue()
+        deficit = min(self.size, 100)  # fill up to 100 immediately
+        created = await self._fill_batch(deficit)
+        log.info("initial fill: +%d accounts", created)
 
     async def _create_one(self) -> dict | None:
         """Create one account. Returns dict or None on failure."""

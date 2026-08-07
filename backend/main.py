@@ -24,8 +24,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from worker import bank, config, health
-from worker.harvester import top_up
+from worker import config, health
+from worker.account_pool import POOL
 from worker.leech import run_messages
 from . import context
 from .pool import run_guarded
@@ -94,27 +94,10 @@ if (FRONTEND_DIST / "assets").exists():
 
 @app.on_event("startup")
 async def _start_prewarmer():
-    # The headless WS path signs up its own account per request, so the browser
-    # harvester/bank isn't needed. Instead start the warm ACCOUNT POOL so signup
-    # stays out of the hot path. Only run the browser prewarmer for the fallback.
-    if getattr(config, "DIRECT_WS_ENABLED", False):
-        from worker.account_pool import POOL
-        from worker.free_proxy_pool import start_background_refresh
-        POOL.start()
-        start_background_refresh()
-        log.info("DIRECT_WS_ENABLED -> headless path, warm account pool + proxy pool started")
-        return
-
-    async def loop():
-        while True:
-            try:
-                n = await top_up()
-                if n:
-                    log.info("bank +%d (fresh=%d)", n, bank.count_fresh())
-            except Exception as e:
-                log.warning("prewarm error: %s", e)
-            await asyncio.sleep(config.PREWARM_INTERVAL_SEC)
-    asyncio.create_task(loop())
+    from worker.free_proxy_pool import start_background_refresh
+    POOL.start()
+    start_background_refresh()
+    log.info("account pool started (target=%d)", POOL.size)
 
 
 # --- pages / status ----------------------------------------------------------
@@ -145,35 +128,23 @@ async def models():
 
 @app.get("/bank")
 async def bank_status():
-    if getattr(config, "DIRECT_WS_ENABLED", False):
-        from worker.account_pool import POOL
-        snap = health.H.snapshot(POOL.ready())
-        return {
-            "mode": "headless-ws",
-            "warm_accounts": POOL.ready(),
-            "pool_target": POOL.size,
-            "status": snap["status"],
-            "reasons": snap["reasons"],
-        }
-    snap = health.H.snapshot(bank.count_fresh())
+    snap = health.H.snapshot(POOL.ready())
     return {
-        "fresh": snap["fresh_accounts"],
+        "mode": "headless-ws",
+        "warm_accounts": POOL.ready(),
+        "pool_target": POOL.size,
         "status": snap["status"],
         "reasons": snap["reasons"],
-        "stats": bank.stats(),
     }
 
 
 @app.get("/health")
 async def health_status():
     """Full watchdog readout: status, why, rates, counters, recent errors."""
-    if getattr(config, "DIRECT_WS_ENABLED", False):
-        from worker.account_pool import POOL
-        snap = health.H.snapshot(POOL.ready())
-        snap["warm_accounts"] = POOL.ready()
-        snap["pool_target"] = POOL.size
-        return snap
-    return health.H.snapshot(bank.count_fresh())
+    snap = health.H.snapshot(POOL.ready())
+    snap["warm_accounts"] = POOL.ready()
+    snap["pool_target"] = POOL.size
+    return snap
 
 
 # --- stateful chat (frontend) ------------------------------------------------

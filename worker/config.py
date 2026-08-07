@@ -132,9 +132,9 @@ DIRECT_WS_ENABLED = True
 AUTH_BASE     = "https://api.use.ai/v1/auth"          # email-login / sign-in/credentials / get-session
 WS_AGENT_BASE = "wss://agents.use.ai/agents/budget-agent"
 MODEL_PREFIX  = "gateway-"                             # selectedModel = gateway-<slug>
-WS_OPEN_TIMEOUT = 30                                   # seconds to establish the socket
-WS_REPLY_TIMEOUT = 90                                  # (legacy total cap; streaming uses idle)
-WS_IDLE_TIMEOUT = 90                                   # give up only if NO token for this long
+WS_OPEN_TIMEOUT = 15                                   # seconds to establish the socket
+WS_REPLY_TIMEOUT = 60                                  # (legacy total cap; streaming uses idle)
+WS_IDLE_TIMEOUT = 45                                   # give up only if NO token for this long
                                                        # (resets per token -> long code gens are fine)
 DIRECT_WS_RETRIES = 2                                  # fresh-account retries on cap/empty
 # Keep the old browser path off unless you explicitly enable it. When direct WS
