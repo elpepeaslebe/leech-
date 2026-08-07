@@ -32,11 +32,9 @@ class AccountPool:
             self._task = asyncio.create_task(self._loop())
             asyncio.create_task(self._initial_fill())
             circuits = _get_circuits()
-            log.info("account pool started (target=%d, circuits=%d)",
-                     self.size, len(circuits))
+            log.info("pool started (target=%d, circuits=%d)", self.size, len(circuits))
 
     async def _initial_fill(self) -> None:
-        """Fill pool using all circuits in parallel."""
         await asyncio.sleep(1)
         q = self._queue()
         deficit = min(self.size, 50)
@@ -47,13 +45,10 @@ class AccountPool:
         """Create accounts using multiple circuits in parallel."""
         circuits = _get_circuits()
         per_circuit = max(1, count // len(circuits))
-        remainder = count - (per_circuit * len(circuits))
 
         async def _worker(circuit):
-            n = per_circuit + (1 if circuit == circuits[0] else 0)
-            n = min(n, count)
             success = 0
-            for _ in range(n):
+            for _ in range(per_circuit):
                 try:
                     await circuit.maybe_renew()
                     a = await create_account()
@@ -74,8 +69,7 @@ class AccountPool:
             *[_worker(c) for c in circuits],
             return_exceptions=True)
 
-        total = sum(r for r in results if isinstance(r, int))
-        return total
+        return sum(r for r in results if isinstance(r, int))
 
     async def _loop(self) -> None:
         while True:
@@ -102,7 +96,6 @@ class AccountPool:
             await asyncio.sleep(delay)
 
     async def acquire(self) -> dict:
-        """A warm account if one is ready (and not stale); otherwise sign up inline."""
         q = self._queue()
         dropped = 0
         while not q.empty():
@@ -114,11 +107,10 @@ class AccountPool:
                 return a
             dropped += 1
         if dropped:
-            log.info("dropped %d stale account(s); pool will refill", dropped)
+            log.info("dropped %d stale account(s)", dropped)
         return await create_account()
 
     def ready(self) -> int:
-        """Only accounts that would actually survive acquire()'s TTL check."""
         if not self._q:
             return 0
         now = time.time()

@@ -1,7 +1,6 @@
 """
-Headless account factory. Uses curl_cffi for browser TLS impersonation
-to bypass Cloudflare TLS fingerprinting. Supports multi-circuit Tor
-for parallel signup across multiple exit IPs.
+Headless account factory. Uses curl_cffi for browser TLS impersonation.
+Multi-circuit Tor for parallel signup across multiple exit IPs.
 """
 import asyncio
 import pathlib
@@ -19,7 +18,6 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 
 class TorCircuit:
-    """Manages a single Tor SOCKS circuit with NEWNYM rotation."""
     def __init__(self, socks, control_port, data_dir, max_used=4):
         self.socks = socks
         self.control_port = control_port
@@ -33,7 +31,6 @@ class TorCircuit:
             try:
                 cookie_path = self.data_dir / "control_auth_cookie"
                 if not cookie_path.exists():
-                    log.warning("Tor cookie not found: %s", cookie_path)
                     return False
                 cookie_hex = cookie_path.read_bytes().hex()
                 reader, writer = await asyncio.wait_for(
@@ -47,16 +44,12 @@ class TorCircuit:
                 writer.close()
                 await writer.wait_closed()
                 self.used = 0
-                ok = "250" in resp.decode()
-                if ok:
-                    log.info("Tor circuit %s renewed", self.socks.split(":")[-1])
-                return ok
+                return "250" in resp.decode()
             except Exception as e:
                 log.warning("Tor renew error %s: %s", self.socks, e)
                 return False
 
     async def maybe_renew(self):
-        """Renew if used too much."""
         async with self.lock:
             if self.used >= self.max_used:
                 await self.renew()
@@ -67,7 +60,6 @@ class TorCircuit:
             self.used += 1
 
 
-# Build circuit pool from config
 _circuits: list[TorCircuit] = []
 
 
@@ -79,7 +71,6 @@ def _get_circuits() -> list[TorCircuit]:
                 c["socks"], c["control"], c["data"],
                 max_used=getattr(config, "TOR_MAX_PER_CIRCUIT", 4)))
     if not _circuits:
-        # Fallback to single circuit
         _circuits = [TorCircuit(
             getattr(config, "TOR_SOCKS", "socks5://127.0.0.1:9050"),
             getattr(config, "TOR_CONTROL_PORT", 9051),
@@ -89,7 +80,6 @@ def _get_circuits() -> list[TorCircuit]:
 
 
 async def renew_tor_circuit() -> bool:
-    """Renew any circuit that needs it (legacy interface)."""
     circuits = _get_circuits()
     for c in circuits:
         async with c.lock:
@@ -99,7 +89,6 @@ async def renew_tor_circuit() -> bool:
 
 
 async def get_next_circuit() -> TorCircuit:
-    """Get the circuit with lowest usage."""
     circuits = _get_circuits()
     best = min(circuits, key=lambda c: c.used)
     await best.maybe_renew()
@@ -107,7 +96,7 @@ async def get_next_circuit() -> TorCircuit:
 
 
 async def create_account(proxy: str | None = None) -> dict:
-    """Sign up a throwaway account using curl_cffi + Tor multi-circuit."""
+    """Sign up: get best circuit, create account via Tor."""
     from curl_cffi.requests import AsyncSession
 
     email = gen_email()
@@ -123,7 +112,7 @@ async def create_account(proxy: str | None = None) -> dict:
         proxy_url = None
 
     async with AsyncSession(impersonate="chrome", proxy=proxy_url, timeout=20) as c:
-        # Step 1: email-login (non-fatal on 403)
+        # Step 1: email-login (non-fatal)
         try:
             await c.post(f"{config.AUTH_BASE}/email-login",
                          json={"email": email},
@@ -138,13 +127,18 @@ async def create_account(proxy: str | None = None) -> dict:
             "guestId": str(uuid.uuid4()),
             "mid": str(uuid.uuid4()),
         })
+
+        if r2.status_code == 429 and circuit:
+            await circuit.renew()
+            raise RuntimeError("429 rate limited")
+
         r2.raise_for_status()
         token = r2.headers.get("set-auth-token", "")
 
         # Step 3: get-session
         s = await c.get(f"{config.AUTH_BASE}/get-session")
         if s.status_code != 200 or s.text in ("", "null"):
-            raise RuntimeError(f"get-session empty after signup ({s.status_code})")
+            raise RuntimeError(f"get-session empty ({s.status_code})")
         j = s.json()
         user_id = j["user"]["id"]
         cookie_header = "; ".join(f"{k}={v}" for k, v in c.cookies.items())
@@ -165,7 +159,6 @@ async def create_account(proxy: str | None = None) -> dict:
         except Exception:
             pass
 
-    # Mark circuit as used
     if circuit:
         await circuit.mark_used()
 
