@@ -1,12 +1,7 @@
 """
-Headless account factory. use.ai signup is two unauthenticated POSTs and needs
-NO password, NO email verification (fake emails are accepted; emailVerified stays
-null). One free message per account, unlimited accounts per IP -> no proxies.
-
-create_account() -> {email, user_id, cookie_header, token}
-
-Uses curl_cffi for browser TLS impersonation to bypass Cloudflare TLS fingerprinting.
-Tor circuit rotation via NEWNYM prevents rate limiting.
+Headless account factory. Uses curl_cffi for browser TLS impersonation
+to bypass Cloudflare TLS fingerprinting. Supports multi-circuit Tor
+for parallel signup across multiple exit IPs.
 """
 import asyncio
 import pathlib
@@ -22,74 +17,121 @@ log = logging.getLogger("session_http")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36")
 
-_tor_nynym_lock = asyncio.Lock()
+
+class TorCircuit:
+    """Manages a single Tor SOCKS circuit with NEWNYM rotation."""
+    def __init__(self, socks, control_port, data_dir, max_used=4):
+        self.socks = socks
+        self.control_port = control_port
+        self.data_dir = pathlib.Path(data_dir)
+        self.max_used = max_used
+        self.used = 0
+        self.lock = asyncio.Lock()
+
+    async def renew(self):
+        async with self.lock:
+            try:
+                cookie_path = self.data_dir / "control_auth_cookie"
+                if not cookie_path.exists():
+                    log.warning("Tor cookie not found: %s", cookie_path)
+                    return False
+                cookie_hex = cookie_path.read_bytes().hex()
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection("127.0.0.1", self.control_port), timeout=5)
+                writer.write(f'AUTHENTICATE {cookie_hex}\r\n'.encode())
+                await writer.drain()
+                await asyncio.wait_for(reader.readline(), timeout=5)
+                writer.write(b'SIGNAL NEWNYM\r\n')
+                await writer.drain()
+                resp = await asyncio.wait_for(reader.readline(), timeout=5)
+                writer.close()
+                await writer.wait_closed()
+                self.used = 0
+                ok = "250" in resp.decode()
+                if ok:
+                    log.info("Tor circuit %s renewed", self.socks.split(":")[-1])
+                return ok
+            except Exception as e:
+                log.warning("Tor renew error %s: %s", self.socks, e)
+                return False
+
+    async def maybe_renew(self):
+        """Renew if used too much."""
+        async with self.lock:
+            if self.used >= self.max_used:
+                await self.renew()
+                await asyncio.sleep(2)
+
+    async def mark_used(self):
+        async with self.lock:
+            self.used += 1
+
+
+# Build circuit pool from config
+_circuits: list[TorCircuit] = []
+
+
+def _get_circuits() -> list[TorCircuit]:
+    global _circuits
+    if not _circuits:
+        for c in getattr(config, "TOR_CIRCUITS", []):
+            _circuits.append(TorCircuit(
+                c["socks"], c["control"], c["data"],
+                max_used=getattr(config, "TOR_MAX_PER_CIRCUIT", 4)))
+    if not _circuits:
+        # Fallback to single circuit
+        _circuits = [TorCircuit(
+            getattr(config, "TOR_SOCKS", "socks5://127.0.0.1:9050"),
+            getattr(config, "TOR_CONTROL_PORT", 9051),
+            getattr(config, "TOR_DATA_DIR", "tor_data"),
+            max_used=getattr(config, "TOR_NEWNYM_EVERY", 4))]
+    return _circuits
 
 
 async def renew_tor_circuit() -> bool:
-    """Send NEWNYM to Tor control port to get a new exit IP."""
-    async with _tor_nynym_lock:
-        try:
-            cookie_path = pathlib.Path(config.TOR_DATA_DIR) / "control_auth_cookie"
-            if not cookie_path.exists():
-                cookie_path = pathlib.Path(__file__).resolve().parent.parent / "tor_data" / "control_auth_cookie"
-            if not cookie_path.exists():
-                log.warning("Tor cookie not found")
-                return False
+    """Renew any circuit that needs it (legacy interface)."""
+    circuits = _get_circuits()
+    for c in circuits:
+        async with c.lock:
+            if c.used >= c.max_used:
+                return await c.renew()
+    return await circuits[0].renew()
 
-            cookie_hex = cookie_path.read_bytes().hex()
-            port = getattr(config, "TOR_CONTROL_PORT", 9051)
 
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", port), timeout=5)
-
-            writer.write(f'AUTHENTICATE {cookie_hex}\r\n'.encode())
-            await writer.drain()
-            auth_resp = await asyncio.wait_for(reader.readline(), timeout=5)
-            auth_str = auth_resp.decode().strip()
-
-            if "250" not in auth_str:
-                log.warning("Tor auth failed: %s", auth_str)
-                writer.close()
-                await writer.wait_closed()
-                return False
-
-            writer.write(b'SIGNAL NEWNYM\r\n')
-            await writer.drain()
-            nynm_resp = await asyncio.wait_for(reader.readline(), timeout=5)
-            nynm_str = nynm_resp.decode().strip()
-
-            writer.close()
-            await writer.wait_closed()
-
-            ok = "250" in nynm_str
-            if ok:
-                log.info("Tor circuit renewed")
-            else:
-                log.warning("Tor NEWNYM failed: %s", nynm_str)
-            return ok
-        except Exception as e:
-            log.warning("Tor NEWNYM error: %s: %s", type(e).__name__, e)
-            return False
+async def get_next_circuit() -> TorCircuit:
+    """Get the circuit with lowest usage."""
+    circuits = _get_circuits()
+    best = min(circuits, key=lambda c: c.used)
+    await best.maybe_renew()
+    return best
 
 
 async def create_account(proxy: str | None = None) -> dict:
-    """Sign up a throwaway account using curl_cffi with browser TLS impersonation."""
+    """Sign up a throwaway account using curl_cffi + Tor multi-circuit."""
     from curl_cffi.requests import AsyncSession
 
     email = gen_email()
-    proxy_url = proxy or ("socks5://127.0.0.1:9050" if getattr(config, "PROXY_TOR", False) else None)
+
+    # Get best available circuit
+    circuit = None
+    if proxy is None and getattr(config, "PROXY_TOR", False):
+        circuit = await get_next_circuit()
+        proxy_url = circuit.socks
+    elif proxy:
+        proxy_url = proxy
+    else:
+        proxy_url = None
 
     async with AsyncSession(impersonate="chrome", proxy=proxy_url, timeout=20) as c:
-        # Step 1: email-login (may return 403 but account is still created)
+        # Step 1: email-login (non-fatal on 403)
         try:
-            r1 = await c.post(f"{config.AUTH_BASE}/email-login",
-                              json={"email": email},
-                              headers={"Content-Type": "application/json"})
-            log.debug("email-login %d for %s", r1.status_code, email)
-        except Exception as e:
-            log.debug("email-login error (non-fatal): %s", e)
+            await c.post(f"{config.AUTH_BASE}/email-login",
+                         json={"email": email},
+                         headers={"Content-Type": "application/json"})
+        except Exception:
+            pass
 
-        # Step 2: sign-in/credentials (this is what actually creates the session)
+        # Step 2: sign-in/credentials
         r2 = await c.post(f"{config.AUTH_BASE}/sign-in/credentials", json={
             "email": email,
             "mixpanelUserId": str(uuid.uuid4()),
@@ -122,6 +164,10 @@ async def create_account(proxy: str | None = None) -> dict:
                                  "at": now, "expires_at": now + max(30, expires_in)}
         except Exception:
             pass
+
+    # Mark circuit as used
+    if circuit:
+        await circuit.mark_used()
 
     log.info("created account %s (userId=%s)", email, user_id[:8])
     acct = {"email": email, "user_id": user_id,

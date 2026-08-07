@@ -211,8 +211,17 @@ TOR_CONTROL_PORT = 9051
 TOR_CONTROL_PASSWORD = ""
 TOR_DATA_DIR = "tor_data"
 TOR_COOKIE_PATH = ""
-TOR_NEWNYM_DELAY = 3
-TOR_NEWNYM_EVERY = 2
+TOR_NEWNYM_DELAY = 2
+TOR_NEWNYM_EVERY = 4
+
+TOR_CIRCUITS = [
+    {"socks": "socks5://127.0.0.1:9050", "control": 9051, "data": "tor_data"},
+    {"socks": "socks5://127.0.0.1:9052", "control": 9053, "data": "tor_data2"},
+    {"socks": "socks5://127.0.0.1:9054", "control": 9055, "data": "tor_data3"},
+    {"socks": "socks5://127.0.0.1:9056", "control": 9057, "data": "tor_data4"},
+    {"socks": "socks5://127.0.0.1:9058", "control": 9059, "data": "tor_data5"},
+]
+TOR_MAX_PER_CIRCUIT = 4
 
 # Option B: free public proxy lists -- run `python -m worker.proxy_sources` to
 # fetch + validate them into PROXY_FILE, then set PROXY_FILE above. Free proxies

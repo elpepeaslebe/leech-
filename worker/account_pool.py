@@ -1,19 +1,14 @@
 """
-Warm account pool. Signup is ~1s of HTTP; keeping a few ready accounts in memory
-takes it out of the hot path so a request only pays for the WS stream.
-
-Each account is single-use (1 free message). The background loop tops the pool
-back up to ACCOUNT_POOL_SIZE; acquire() hands one out, or signs up inline if the
-pool is drained (graceful degradation under burst load).
-
-Rotates Tor circuits via NEWNYM every TOR_NEWNYM_EVERY accounts to avoid rate limiting.
+Warm account pool with multi-circuit Tor. Each circuit handles up to
+TOR_MAX_PER_CIRCUIT signups before auto-renewing. Multiple circuits
+run in parallel for maximum throughput.
 """
 import asyncio
 import logging
 import time
 
 from . import config
-from .session_http import create_account, renew_tor_circuit
+from .session_http import create_account, _get_circuits
 
 log = logging.getLogger("account_pool")
 
@@ -26,7 +21,6 @@ class AccountPool:
         self._q: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
         self._consec_fails = 0
-        self._since_renew = 0
 
     def _queue(self) -> asyncio.Queue:
         if self._q is None:
@@ -37,45 +31,51 @@ class AccountPool:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
             asyncio.create_task(self._initial_fill())
-            log.info("account pool started (target=%d, refill=%ds)", self.size, self.refill_sec)
+            circuits = _get_circuits()
+            log.info("account pool started (target=%d, circuits=%d)",
+                     self.size, len(circuits))
 
     async def _initial_fill(self) -> None:
-        """Aggressively fill pool on startup."""
+        """Fill pool using all circuits in parallel."""
         await asyncio.sleep(1)
         q = self._queue()
         deficit = min(self.size, 50)
         created = await self._fill_batch(deficit)
         log.info("initial fill: +%d accounts", created)
 
-    async def _maybe_renew_tor(self):
-        """Rotate Tor circuit every N accounts."""
-        nym_every = getattr(config, "TOR_NEWNYM_EVERY", 2)
-        self._since_renew += 1
-        if self._since_renew >= nym_every:
-            self._since_renew = 0
-            ok = await renew_tor_circuit()
-            if ok:
-                await asyncio.sleep(getattr(config, "TOR_NEWNYM_DELAY", 3))
-
     async def _fill_batch(self, count: int) -> int:
-        """Create accounts sequentially with Tor rotation (avoid 429)."""
-        success = 0
-        for i in range(count):
-            try:
-                await self._maybe_renew_tor()
-                a = await create_account()
-                a["_born"] = time.time()
-                q = self._queue()
-                if not q.full():
-                    await q.put(a)
-                    success += 1
-            except Exception as e:
-                log.warning("account signup failed: %s", e)
-                if "429" in str(e):
-                    await asyncio.sleep(3)
-                    await renew_tor_circuit()
-                    await asyncio.sleep(3)
-        return success
+        """Create accounts using multiple circuits in parallel."""
+        circuits = _get_circuits()
+        per_circuit = max(1, count // len(circuits))
+        remainder = count - (per_circuit * len(circuits))
+
+        async def _worker(circuit):
+            n = per_circuit + (1 if circuit == circuits[0] else 0)
+            n = min(n, count)
+            success = 0
+            for _ in range(n):
+                try:
+                    await circuit.maybe_renew()
+                    a = await create_account()
+                    a["_born"] = time.time()
+                    q = self._queue()
+                    if not q.full():
+                        await q.put(a)
+                        success += 1
+                except Exception as e:
+                    log.warning("signup failed (circuit %s): %s",
+                                circuit.socks.split(":")[-1], e)
+                    if "429" in str(e):
+                        await circuit.renew()
+                        await asyncio.sleep(2)
+            return success
+
+        results = await asyncio.gather(
+            *[_worker(c) for c in circuits],
+            return_exceptions=True)
+
+        total = sum(r for r in results if isinstance(r, int))
+        return total
 
     async def _loop(self) -> None:
         while True:
@@ -84,7 +84,7 @@ class AccountPool:
                 deficit = self.size - q.qsize()
 
                 if deficit > 0:
-                    batch = min(deficit, 5)
+                    batch = min(deficit, 10)
                     created = await self._fill_batch(batch)
 
                     if created > 0:
