@@ -109,7 +109,8 @@ TOOL_DOCS = (
     "### System\n"
     "run_command(command, timeout?) - Execute shell command\n\n"
     "### External\n"
-    "web_search(query) - Search the web\n"
+    "web_search(query) - Search the web (quick results)\n"
+    "web_search_detailed(query) - Search with full snippets (research)\n"
     "image_generate(prompt) - Generate image URL\n\n"
     "## Rules\n"
     "- You CAN access and edit files. Never say you cannot.\n"
@@ -123,6 +124,25 @@ EFFORT_PROMPTS = {
     "medium": "\n\n[EFFORT: MEDIUM] Balanced. Show key changes, explain briefly.",
     "high":   "\n\n[EFFORT: HIGH] Think carefully. Consider edge cases. Explain your approach.",
 }
+
+THINKING_PROMPT = (
+    "\n\n## Thinking Mode\n"
+    "When thinking mode is enabled, show your reasoning process inside <thinking> tags:\n"
+    "<thinking>\n"
+    "Your step-by-step reasoning here...\n"
+    "</thinking>\n\n"
+    "Then provide your final answer or action outside the tags.\n"
+    "This helps users understand your thought process."
+)
+
+# OpenAI-compatible tool calling format
+OPENAI_TOOL_PROMPT = (
+    "\n\n## OpenAI Tool Calling Format\n"
+    "When the client sends tools in OpenAI format, you can call them by outputting:\n"
+    '<tool>{"name":"tool_name","args":{...}}</tool>\n\n'
+    "Available tools are listed above. Use the exact tool names and argument formats.\n"
+    "You can make multiple tool calls in one response."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -280,30 +300,27 @@ def _has_tool_prompt(messages: list) -> bool:
     return False
 
 
-def _build_system_prompt(effort: str = "medium", has_openai_tools: bool = False) -> str:
+def _build_system_prompt(effort: str = "medium", has_openai_tools: bool = False,
+                         thinking: bool = False) -> str:
     prompt = TOOL_DOCS
     if has_openai_tools:
-        prompt += (
-            "\n\n## OpenAI Tool Calling\n"
-            "The client sends tools in OpenAI function-calling format. When you want to "
-            "call a tool, output a tool call block like this:\n"
-            '<tool>{"name":"tool_name","args":{...}}</tool>\n\n'
-            "The proxy will convert this to OpenAI format automatically. "
-            "You MUST use this exact format — do NOT use markdown or other formats for tool calls."
-        )
+        prompt += OPENAI_TOOL_PROMPT
+    if thinking:
+        prompt += THINKING_PROMPT
     eff = (effort or "medium").lower()
     if eff in EFFORT_PROMPTS:
         prompt += EFFORT_PROMPTS[eff]
     return prompt
 
 
-def _inject_tool_prompt(messages: list, effort: str = "medium", has_openai_tools: bool = False) -> list:
+def _inject_tool_prompt(messages: list, effort: str = "medium",
+                        has_openai_tools: bool = False, thinking: bool = False) -> list:
     convo = list(messages) if messages else []
     if not convo:
         convo.append({"role": "user", "content": ""})
 
     if not _has_tool_prompt(convo):
-        convo.insert(0, {"role": "system", "content": _build_system_prompt(effort, has_openai_tools)})
+        convo.insert(0, {"role": "system", "content": _build_system_prompt(effort, has_openai_tools, thinking)})
 
     return convo
 
@@ -342,7 +359,7 @@ def _strip_edits_from_text(text: str, edits: list[dict]) -> str:
 
 async def stream_with_tools(model: str, messages: list, account=None,
                             effort: str = "medium", agentic: bool = True,
-                            has_openai_tools: bool = False):
+                            has_openai_tools: bool = False, thinking: bool = False):
     """Async generator: yields tool-aware events.
 
     NATIVE FILE EDIT: detects code blocks, diff edits, and tool tags
@@ -350,7 +367,7 @@ async def stream_with_tools(model: str, messages: list, account=None,
     """
     from . import leech
 
-    convo = _inject_tool_prompt(messages, effort, has_openai_tools)
+    convo = _inject_tool_prompt(messages, effort, has_openai_tools, thinking)
 
     for _step in range(_MAX_TOOL_STEPS):
         acc = ""
@@ -393,12 +410,13 @@ async def stream_with_tools(model: str, messages: list, account=None,
 
 async def complete_with_tools(model: str, messages: list, account=None,
                               effort: str = "medium", agentic: bool = True,
-                              has_openai_tools: bool = False) -> str:
+                              has_openai_tools: bool = False, thinking: bool = False) -> str:
     """Buffered variant: collect the full text reply."""
     parts = []
     async for event in stream_with_tools(model, messages, account=account,
                                          effort=effort, agentic=agentic,
-                                         has_openai_tools=has_openai_tools):
+                                         has_openai_tools=has_openai_tools,
+                                         thinking=thinking):
         if event["type"] == "token":
             parts.append(event["token"])
     return "".join(parts).strip()

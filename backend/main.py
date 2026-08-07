@@ -228,6 +228,7 @@ async def chat(req: Request):
     message = body.get("message", "")
     model = body.get("model", "default")
     effort = body.get("effort", "medium")
+    thinking = body.get("thinking", False)
     session_id = body.get("sessionId") or str(uuid.uuid4())
 
     messages = context.build_messages(session_id, message)   # role-tagged history + new turn
@@ -237,7 +238,7 @@ async def chat(req: Request):
         from worker.tool_stream import stream_with_tools
         parts: list[str] = []
         try:
-            async for event in stream_with_tools(model, messages, effort=effort):
+            async for event in stream_with_tools(model, messages, effort=effort, thinking=thinking):
                 sse = _stream_tool_event(event)
                 if sse:
                     yield sse
@@ -276,8 +277,9 @@ async def agent_run(req: Request, _key=Depends(require_api_key)):
     message = body.get("message") or body.get("prompt") or ""
     model = body.get("model", "default")
     effort = body.get("effort", "medium")
+    thinking = body.get("thinking", False)
     messages = [{"role": "user", "content": message}]
-    result = await run_guarded(lambda: complete_with_tools(model, messages, effort=effort))
+    result = await run_guarded(lambda: complete_with_tools(model, messages, effort=effort, thinking=thinking))
     return JSONResponse({"text": result, "events": []})
 
 
@@ -304,6 +306,7 @@ async def openai_completions(req: Request, _key=Depends(require_api_key)):
     msgs = body.get("messages", [])
     has_tools = bool(body.get("tools"))
     effort = body.get("effort", "medium")
+    thinking = body.get("thinking", False)
 
     if stream:
         from worker.tool_stream import stream_with_tools
@@ -312,7 +315,7 @@ async def openai_completions(req: Request, _key=Depends(require_api_key)):
 
         async def gen():
             base = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model}
-            async for event in stream_with_tools(model, msgs, effort=effort, has_openai_tools=has_tools):
+            async for event in stream_with_tools(model, msgs, effort=effort, has_openai_tools=has_tools, thinking=thinking):
                 if event["type"] == "token":
                     chunk = {**base, "choices": [{"index": 0, "delta": {"content": event["token"]},
                                                   "finish_reason": None}]}
@@ -358,5 +361,5 @@ async def openai_completions(req: Request, _key=Depends(require_api_key)):
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     from worker.tool_stream import complete_with_tools
-    reply = await run_guarded(lambda: complete_with_tools(model, msgs, effort=effort, has_openai_tools=has_tools))
+    reply = await run_guarded(lambda: complete_with_tools(model, msgs, effort=effort, has_openai_tools=has_tools, thinking=thinking))
     return JSONResponse(_openai_block(reply, model))

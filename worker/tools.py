@@ -228,32 +228,100 @@ def grep_search(pattern, path=".", case_insensitive=False, max_results=200):
 
 
 def web_search(query, num_results=5):
-    """Search the web using DuckDuckGo Lite (no API key needed)."""
+    """Search the web. Uses Wikipedia + Google scraping."""
+    import httpx
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    results = []
+
+    # 1. Wikipedia summary
     try:
-        url = "https://lite.duckduckgo.com/lite?" + urllib.parse.urlencode({"q": query})
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
-        })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-        # Extract snippets from DDG lite HTML
-        results = []
-        # Simple extraction: look for result links and snippets
-        link_pattern = re.compile(r'<a[^>]+class="result-link"[^>]*href="([^"]+)"[^>]*>([^<]+)</a>')
-        snippet_pattern = re.compile(r'<td[^>]+class="result-snippet"[^>]*>(.*?)</td>', re.DOTALL)
-        links = link_pattern.findall(html)
-        snippets = snippet_pattern.findall(html)
-        for i, (href, title) in enumerate(links[:num_results]):
-            snippet = re.sub(r'<[^>]+>', '', snippets[i]).strip() if i < len(snippets) else ""
-            results.append(f"{i+1}. {title.strip()}\n   {snippet}\n   URL: {href}")
-        if results:
-            return "\n\n".join(results)
-        # Fallback: try to extract any text
-        text = re.sub(r'<[^>]+>', ' ', html)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text[:2000] if text else "No results found"
-    except Exception as e:
-        return f"Search error: {e}"
+        wiki_query = query.replace(" ", "_")
+        with httpx.Client(timeout=8, headers=headers, follow_redirects=True) as client:
+            r = client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_query}")
+            if r.status_code == 200:
+                data = r.json()
+                title = data.get("title", "")
+                extract = data.get("extract", "")
+                page_url = data.get("content_urls", {}).get("desktop", {}).get("page", "")
+                if title and extract:
+                    results.append(f"1. [Wikipedia] {title}\n   {extract[:300]}\n   URL: {page_url}")
+    except Exception:
+        pass
+
+    # 2. Google search (scrape)
+    try:
+        with httpx.Client(timeout=10, headers=headers, follow_redirects=True) as client:
+            r = client.get("https://www.google.com/search", params={"q": query, "num": num_results, "hl": "en"})
+            if r.status_code == 200:
+                html = r.text
+                title_pattern = re.compile(r'<h3[^>]*>(.*?)</h3>', re.DOTALL)
+                link_pattern = re.compile(r'<a[^>]+href="/url\?q=([^&"]+)')
+
+                titles = title_pattern.findall(html)
+                links = link_pattern.findall(html)
+
+                for i in range(min(len(titles), len(links), num_results)):
+                    title = re.sub(r'<[^>]+>', '', titles[i]).strip()
+                    link = urllib.parse.unquote(links[i].split('&')[0])
+                    if title and link.startswith('http') and 'google' not in link:
+                        results.append(f"{len(results)+1}. {title}\n   URL: {link}")
+    except Exception:
+        pass
+
+    return "\n\n".join(results) if results else f"No results found for: {query}"
+
+
+def web_search_with_snippets(query, num_results=3):
+    """Search with full snippets for detailed research."""
+    import httpx
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    results = []
+
+    # Wikipedia detailed
+    try:
+        wiki_query = query.replace(" ", "_")
+        with httpx.Client(timeout=8, headers=headers, follow_redirects=True) as client:
+            r = client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_query}")
+            if r.status_code == 200:
+                data = r.json()
+                title = data.get("title", "")
+                extract = data.get("extract", "")
+                page_url = data.get("content_urls", {}).get("desktop", {}).get("page", "")
+                if title and extract:
+                    results.append(f"### [Wikipedia] {title}\n{extract}\nSource: {page_url}")
+    except Exception:
+        pass
+
+    # Google with snippets
+    try:
+        with httpx.Client(timeout=10, headers=headers, follow_redirects=True) as client:
+            r = client.get("https://www.google.com/search", params={"q": query, "num": num_results, "hl": "en"})
+            if r.status_code == 200:
+                html = r.text
+                title_pattern = re.compile(r'<h3[^>]*>(.*?)</h3>', re.DOTALL)
+                link_pattern = re.compile(r'<a[^>]+href="/url\?q=([^&"]+)')
+                snippet_pattern = re.compile(r'<div[^>]*>(.*?)</div>', re.DOTALL)
+
+                titles = title_pattern.findall(html)
+                links = link_pattern.findall(html)
+
+                for i in range(min(len(titles), len(links), num_results)):
+                    title = re.sub(r'<[^>]+>', '', titles[i]).strip()
+                    link = urllib.parse.unquote(links[i].split('&')[0])
+                    if title and link.startswith('http') and 'google' not in link:
+                        results.append(f"### {title}\nSource: {link}")
+    except Exception:
+        pass
+
+    return "\n\n".join(results) if results else f"No detailed results found for: {query}"
 
 
 def image_generate(prompt, size="1024x1024"):
@@ -558,5 +626,6 @@ TOOLS = {
     "run_command": run_command,
     # External
     "web_search": web_search,
+    "web_search_detailed": web_search_with_snippets,
     "image_generate": image_generate,
 }
